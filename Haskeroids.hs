@@ -2,6 +2,7 @@
 import Graphics.Blank                    
 import Control.Concurrent
 import Data.Char
+import System.Random
 import Data.Map as Map
 
 main = blankCanvas 3000 { events = ["keydown","keyup"] }$ run
@@ -17,7 +18,12 @@ data GameState = GameState { getCoords :: Coords, getMovDict :: MovementDict, ge
 
 
 run :: DeviceContext -> IO (a)
-run = loop (GameState (200,200,0) Map.empty [((100,100,0), 4, 0, 45, 0.25)])
+run ctx =do
+	let canvasHeight = height ctx
+	let canvasWidth  = width ctx
+	astroids <- createXLargeAsteroid (canvasWidth,canvasHeight)
+	loop (GameState (200,200,0) Map.empty [astroids] )ctx
+	
 
 
 loop :: GameState -> DeviceContext -> IO(a)
@@ -51,6 +57,14 @@ loop gState context = do
 					let newLoc = (Prelude.foldl (movement.(fixPosition (canvasWidth, canvasHeight)))  coords charList) 
 				
 					loop (GameState (newLoc) dict newAsteroids) context
+
+createXLargeAsteroid :: (Double,Double) -> IO(Asteroid)
+createXLargeAsteroid (maxX,maxY) = do
+	x <- randomRIO(0,maxX)
+	y <- randomRIO(0,maxY)
+	r <- randomRIO(0 , 360)
+	dir <- randomRIO(0, 360)
+	return ((x,y,r),4,0,dir,0.25)
 
 moveAstroids :: [Asteroid] -> (Double,Double) -> [Asteroid]
 moveAstroids as maxWindow = Prelude.map (moveAstroid maxWindow) as
