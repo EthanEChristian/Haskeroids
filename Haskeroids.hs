@@ -4,39 +4,45 @@ import Control.Concurrent
 import Data.Char
 import Data.Map as Map
 
-main = blankCanvas 3000 { events = ["keydown","keyup"] }$ (loop (GameState (200,200,0) Map.empty [])) -- start blank canvas on port 3000
+main = blankCanvas 3000 { events = ["keydown","keyup"] }$ run
 
-type Coords = (Double,Double,Double)
+type Coords = (Double,Double,Double)    -- x and y , r to represent amount of rotation
 type MovementDict = Map (Maybe Int) Bool
 type Size = Int
 type Hits = Int
-type Direction = Int
-type Speed = Int
+type Direction = Int -- 0 - 360 Degrees, 0 being straight up
+type Speed = Double
 type Asteroid = (Coords,Size,Hits,Direction,Speed)
 data GameState = GameState { getCoords :: Coords, getMovDict :: MovementDict, getAsteroids :: [Asteroid]}
 
 
+run :: DeviceContext -> IO (a)
+run = loop (GameState (200,200,0) Map.empty [((100,100,0), 4, 0, 45, 0.25)])
 
 
 loop :: GameState -> DeviceContext -> IO(a)
 loop gState context = do 
 		let preKeys = getMovDict gState
 		let coords = getCoords gState
+		let astroids = getAsteroids gState
+		let canvasHeight = height context
+		let canvasWidth  = width context
+
 		send context $ do
 			clearCanvas
+			printSimpleAsteroid (head astroids)
 			printShip coords
 
-			--printSimpleAsteroid (100,100,0) 4 0 0 0
+		let newAsteroids = moveAstroids astroids (canvasWidth,canvasHeight)
 
 		threadDelay (2 * 100)		
 
 		ch <- flush context
 
-		let canvasHeight = height context
-		let canvasWidth  = width context
+		
 
 		if ((Prelude.null ch) && (Map.null preKeys )) 
-			then loop gState context
+			then loop (GameState (coords) preKeys newAsteroids) context
 			else 
 				do
 					print ch
@@ -44,18 +50,27 @@ loop gState context = do
 					let charList = keys dict
 					let newLoc = (Prelude.foldl (movement.(fixPosition (canvasWidth, canvasHeight)))  coords charList) 
 				
-					loop (GameState (newLoc) dict []) context
+					loop (GameState (newLoc) dict newAsteroids) context
+
+moveAstroids :: [Asteroid] -> (Double,Double) -> [Asteroid]
+moveAstroids as maxWindow = Prelude.map (moveAstroid maxWindow) as
+
+moveAstroid :: (Double,Double) -> Asteroid -> Asteroid
+moveAstroid maxWindow ((x,y,r), sz, hts, dir, spd) = (crds ,sz,hts,dir,spd) where
+	x' = (x - (spd * sin(degreeToRad $ fromIntegral(dir))))
+	y' = (y - (spd * cos(degreeToRad $ fromIntegral(dir))))
+	crds = fixPosition maxWindow (x',y',r)
 
 printSimpleAsteroid :: Asteroid -> Canvas ()
 printSimpleAsteroid ((x, y, _), size, hits, dir, spd)= do
 	beginPath()
-	arc(x, y, size * 25, 0, pi*2, False)
-	fillStyle "black"
-    closePath()
-    fill()
+	arc(x, y, (fromIntegral(size) * 10), 0, pi*2, False)
+	fillStyle "gray"
+	closePath()
+	fill()
 
 printShip :: Coords -> Canvas ()
-printShip (x,y,r) =  do-- send commands to this specific context
+printShip (x,y,r) =  do
 	let rot = degreeToRad (360 - r)
 
 	translate(x,(y + 10))
