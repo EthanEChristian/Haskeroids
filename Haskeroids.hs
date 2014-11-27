@@ -2,6 +2,7 @@
 import Graphics.Blank                    
 import Control.Concurrent
 import Data.Char
+import Data.Text
 import System.Random
 import Data.Map as Map
 
@@ -9,56 +10,102 @@ main = blankCanvas 3000 { events = ["keydown","keyup"] }$ run
 
 type Coords = (Double,Double,Double)    -- x and y , r to represent amount of rotation
 type MovementDict = Map (Maybe Int) Bool
+type ScreenDemension = (Double,Double)
 type Size = Int
 type Hits = Int
 type Direction = Int -- 0 - 360 Degrees, 0 being straight up
 type Speed = Double
 type Asteroid = (Coords,Size,Hits,Direction,Speed)
-data GameState = GameState { getCoords :: Coords, getMovDict :: MovementDict, getAsteroids :: [Asteroid]}
+data GameState = GameState { getCoords :: Coords, getMovDict :: MovementDict, getAsteroids :: [Asteroid], getScore :: Int}
 
 
-run :: DeviceContext -> IO (a)
+run :: DeviceContext -> IO ()
 run ctx =do
 	let canvasHeight = height ctx
 	let canvasWidth  = width ctx
 	astroids <- createXLargeAsteroid (canvasWidth,canvasHeight)
-	loop (GameState (200,200,0) Map.empty [astroids] )ctx
+	loop (GameState (200,200,0) Map.empty [astroids] 0)ctx
 	
 
 
-loop :: GameState -> DeviceContext -> IO(a)
+loop :: GameState -> DeviceContext -> IO()
 loop gState context = do 
 		let preKeys = getMovDict gState
+
 		let coords = getCoords gState
+
 		let astroids = getAsteroids gState
-		let canvasHeight = height context
-		let canvasWidth  = width context
 
-		send context $ do
-			clearCanvas
-			printSimpleAsteroid (head astroids)
-			printShip coords
+		let score = getScore gState
 
-		let newAsteroids = moveAstroids astroids (canvasWidth,canvasHeight)
-
-		threadDelay (2 * 100)		
-
-		ch <- flush context
-
+		let screenDim = (width context,height context)
 		
 
-		if ((Prelude.null ch) && (Map.null preKeys )) 
-			then loop (GameState (coords) preKeys newAsteroids) context
-			else 
+		
+		
+		let collisions = Prelude.map (detectAsteroidCollision coords) astroids  
+		if (or collisions)
+			then
 				do
-					print ch
-					let dict = Prelude.foldl reduceKeys preKeys ch
-					let charList = keys dict
-					let newLoc = (Prelude.foldl (movement.(fixPosition (canvasWidth, canvasHeight)))  coords charList) 
-				
-					loop (GameState (newLoc) dict newAsteroids) context
+					print "Collision"
+					send context $ do
+						printDeath screenDim
+		else
+			do
+				send context $ do
+					clearCanvas
+					printScore score screenDim
+					sequence_ $ Prelude.map printSimpleAsteroid astroids
+					printShip coords
 
-createXLargeAsteroid :: (Double,Double) -> IO(Asteroid)
+				
+
+				threadDelay (2 * 1000)		
+
+				newAsts <- repopulateAsteroids astroids screenDim
+				
+				let newAsteroids = moveAstroids newAsts screenDim
+
+				ch <- flush context
+
+				
+
+				if ((Prelude.null ch) && (Map.null preKeys )) 
+					then loop (GameState coords preKeys newAsteroids score) context
+					else 
+						do
+							print ch
+							let dict = Prelude.foldl reduceKeys preKeys ch
+							let charList = keys dict
+							let newLoc = (Prelude.foldl (movement.(fixPosition screenDim))  coords charList) 
+						
+							loop (GameState newLoc dict newAsteroids score) context
+
+printDeath :: ScreenDemension -> Canvas ()
+printDeath (maxX,maxY) = do
+	fillStyle "black"
+	font "bold 60px Arial"
+	fillText( "You Died",(maxX /2 ), (maxY /2))
+
+repopulateAsteroids :: [Asteroid] -> ScreenDemension -> IO([Asteroid])
+repopulateAsteroids as dim= do
+	if (Prelude.length as) < 1
+		then
+			do 
+				newAst <- createXLargeAsteroid dim
+				repopulateAsteroids (as ++ [newAst]) dim
+	else
+		return as
+
+detectAsteroidCollision :: Coords -> Asteroid -> Bool
+detectAsteroidCollision (x,y, r) (crds, sz, _, _, _)  = (fromIntegral radAst) > distToShip where
+	radAst = 10 * sz
+	deltaX = abs ((fst3 crds) - x)
+	deltaY = abs ((snd3 crds) - (y+10))
+	distToShip = sqrt((deltaX ** 2) + (deltaY ** 2))
+
+
+createXLargeAsteroid :: ScreenDemension -> IO(Asteroid)
 createXLargeAsteroid (maxX,maxY) = do
 	x <- randomRIO(0,maxX)
 	y <- randomRIO(0,maxY)
@@ -66,10 +113,10 @@ createXLargeAsteroid (maxX,maxY) = do
 	dir <- randomRIO(0, 360)
 	return ((x,y,r),4,0,dir,0.25)
 
-moveAstroids :: [Asteroid] -> (Double,Double) -> [Asteroid]
+moveAstroids :: [Asteroid] -> ScreenDemension -> [Asteroid]
 moveAstroids as maxWindow = Prelude.map (moveAstroid maxWindow) as
 
-moveAstroid :: (Double,Double) -> Asteroid -> Asteroid
+moveAstroid :: ScreenDemension -> Asteroid -> Asteroid
 moveAstroid maxWindow ((x,y,r), sz, hts, dir, spd) = (crds ,sz,hts,dir,spd) where
 	x' = (x - (spd * sin(degreeToRad $ fromIntegral(dir))))
 	y' = (y - (spd * cos(degreeToRad $ fromIntegral(dir))))
@@ -83,8 +130,15 @@ printSimpleAsteroid ((x, y, _), size, hits, dir, spd)= do
 	closePath()
 	fill()
 
+printScore :: Int -> ScreenDemension -> Canvas ()
+printScore x (maxX, maxY) = do 
+	fillStyle "black"
+	font "bold 36px Arial"
+	fillText((pack(show x)),(maxX -150), 40)
+
 printShip :: Coords -> Canvas ()
 printShip (x,y,r) =  do
+	save()
 	let rot = degreeToRad (360 - r)
 
 	translate(x,(y + 10))
@@ -100,6 +154,7 @@ printShip (x,y,r) =  do
 
 	fillStyle "black"
 	fill()
+	restore()
 
 reduceKeys :: MovementDict -> Event -> MovementDict
 reduceKeys m ev = do
@@ -119,7 +174,7 @@ fixDegrees 360 = 0
 fixDegrees (-1) = 359
 fixDegrees x = x
 
-fixPosition ::(Double,Double) -> Coords ->  Coords
+fixPosition ::ScreenDemension -> Coords ->  Coords
 fixPosition (maxX,maxY) (x,y,r)  = (maxValFix x maxX, maxValFix y maxY,r)
 
 
