@@ -9,14 +9,16 @@ import Data.Map as Map
 main = blankCanvas 3000 { events = ["keydown","keyup"] }$ run
 
 type Coords = (Double,Double,Double)    -- x and y , r to represent amount of rotation
-type MovementDict = Map (Maybe Int) Bool
-type ScreenDemension = (Double,Double)
+type KeyDict = Map (Maybe Int) Bool
+type ScreenDimension = (Double,Double)
 type Size = Int
 type Hits = Int
 type Direction = Int -- 0 - 360 Degrees, 0 being straight up
 type Speed = Double
+type TravelDist = Int
+type Projectile = (Coords, TravelDist)
 type Asteroid = (Coords,Size,Hits,Direction,Speed)
-data GameState = GameState { getCoords :: Coords, getMovDict :: MovementDict, getAsteroids :: [Asteroid], getScore :: Int}
+data GameState = GameState { getCoords :: Coords, getMovDict :: KeyDict, getAsteroids :: [Asteroid], getProjectiles :: [Projectile] ,getTimeSinceFire :: Int , getScore :: Int}
 
 
 run :: DeviceContext -> IO ()
@@ -24,7 +26,7 @@ run ctx =do
 	let canvasHeight = height ctx
 	let canvasWidth  = width ctx
 	astroids <- createXLargeAsteroid (canvasWidth,canvasHeight)
-	loop (GameState (200,200,0) Map.empty [astroids] 0)ctx
+	loop (GameState (200,200,0) Map.empty [astroids] [] 0 0)ctx
 	
 
 
@@ -39,6 +41,10 @@ loop gState context = do
 		let score = getScore gState
 
 		let screenDim = (width context,height context)
+
+		let projects = getProjectiles gState
+
+		let lastFire = getTimeSinceFire gState
 		
 
 		
@@ -56,6 +62,7 @@ loop gState context = do
 					clearCanvas
 					printScore score screenDim
 					sequence_ $ Prelude.map printSimpleAsteroid astroids
+					sequence_ $ Prelude.map printProjectile projects
 					printShip coords
 
 				
@@ -65,31 +72,49 @@ loop gState context = do
 				newAsts <- repopulateAsteroids astroids screenDim
 				
 				let newAsteroids = moveAstroids newAsts screenDim
+				let mvdProjects = moveProjectiles projects screenDim
+				
+
 
 				ch <- flush context
 
 				
 
 				if ((Prelude.null ch) && (Map.null preKeys )) 
-					then loop (GameState coords preKeys newAsteroids score) context
+					then loop (GameState coords preKeys newAsteroids mvdProjects (lastFire +1) score) context
 					else 
 						do
 							print ch
 							let dict = Prelude.foldl reduceKeys preKeys ch
 							let charList = keys dict
 							let newLoc = (Prelude.foldl (movement.(fixPosition screenDim))  coords charList) 
-						
-							loop (GameState newLoc dict newAsteroids score) context
+							if (lastFire > 10)
+								then
+									do
+										let newPros = fireProjectiles dict coords mvdProjects
+										loop (GameState newLoc dict newAsteroids newPros 0 score) context
+							else
+								loop (GameState newLoc dict newAsteroids mvdProjects (lastFire +1) score) context
 
-printDeath :: ScreenDemension -> Canvas ()
-printDeath (maxX,maxY) = do
-	fillStyle "black"
-	font "bold 60px Arial"
-	fillText( "You Died",(maxX /2 ), (maxY /2))
+moveProjectiles :: [Projectile] -> ScreenDimension -> [Projectile]
+moveProjectiles pros maxDim = Prelude.map (moveProjectile maxDim) (Prelude.filter (\pro -> snd pro < 100) pros)
 
-repopulateAsteroids :: [Asteroid] -> ScreenDemension -> IO([Asteroid])
+moveProjectile :: ScreenDimension -> Projectile -> Projectile
+moveProjectile maxWindow ((x,y,r), mvDst) = (crds,(mvDst+1)) where
+	x' = (x - (4 * sin(degreeToRad $ r)))
+	y' = (y - (4 * cos(degreeToRad $ r)))
+	crds = fixPosition maxWindow (x',y',r)
+
+fireProjectiles :: KeyDict -> Coords -> [Projectile] -> [Projectile]
+fireProjectiles dict (x,y,r) pros | (member (Just 32) dict) = pros ++ [(newCrds,0)] where
+	x' = x - (10 *sin(degreeToRad r))
+	y' = (y + 10 )- (10 * cos (degreeToRad r))
+	newCrds = (x',y',r)
+fireProjectiles _ _	pros									 = pros 
+
+repopulateAsteroids :: [Asteroid] -> ScreenDimension -> IO([Asteroid])
 repopulateAsteroids as dim= do
-	if (Prelude.length as) < 1
+	if (Prelude.length as) < 10
 		then
 			do 
 				newAst <- createXLargeAsteroid dim
@@ -105,7 +130,7 @@ detectAsteroidCollision (x,y, r) (crds, sz, _, _, _)  = (fromIntegral radAst) > 
 	distToShip = sqrt((deltaX ** 2) + (deltaY ** 2))
 
 
-createXLargeAsteroid :: ScreenDemension -> IO(Asteroid)
+createXLargeAsteroid :: ScreenDimension -> IO(Asteroid)
 createXLargeAsteroid (maxX,maxY) = do
 	x <- randomRIO(0,maxX)
 	y <- randomRIO(0,maxY)
@@ -113,28 +138,44 @@ createXLargeAsteroid (maxX,maxY) = do
 	dir <- randomRIO(0, 360)
 	return ((x,y,r),4,0,dir,0.25)
 
-moveAstroids :: [Asteroid] -> ScreenDemension -> [Asteroid]
+moveAstroids :: [Asteroid] -> ScreenDimension -> [Asteroid]
 moveAstroids as maxWindow = Prelude.map (moveAstroid maxWindow) as
 
-moveAstroid :: ScreenDemension -> Asteroid -> Asteroid
+moveAstroid :: ScreenDimension -> Asteroid -> Asteroid
 moveAstroid maxWindow ((x,y,r), sz, hts, dir, spd) = (crds ,sz,hts,dir,spd) where
 	x' = (x - (spd * sin(degreeToRad $ fromIntegral(dir))))
 	y' = (y - (spd * cos(degreeToRad $ fromIntegral(dir))))
 	crds = fixPosition maxWindow (x',y',r)
+
+printProjectile :: Projectile -> Canvas ()
+printProjectile ((x,y,r), _) = do
+	beginPath()
+	arc(x,y,4,0,pi*2,False)
+	fillStyle "red"
+	closePath()
+	fill()
 
 printSimpleAsteroid :: Asteroid -> Canvas ()
 printSimpleAsteroid ((x, y, _), size, hits, dir, spd)= do
 	beginPath()
 	arc(x, y, (fromIntegral(size) * 10), 0, pi*2, False)
 	fillStyle "gray"
+	strokeStyle "black"
 	closePath()
 	fill()
+	stroke()
 
-printScore :: Int -> ScreenDemension -> Canvas ()
+printScore :: Int -> ScreenDimension -> Canvas ()
 printScore x (maxX, maxY) = do 
 	fillStyle "black"
 	font "bold 36px Arial"
 	fillText((pack(show x)),(maxX -150), 40)
+
+printDeath :: ScreenDimension -> Canvas ()
+printDeath (maxX,maxY) = do
+	fillStyle "black"
+	font "bold 60px Arial"
+	fillText( "You Died",(maxX /2 ), (maxY /2))
 
 printShip :: Coords -> Canvas ()
 printShip (x,y,r) =  do
@@ -156,7 +197,7 @@ printShip (x,y,r) =  do
 	fill()
 	restore()
 
-reduceKeys :: MovementDict -> Event -> MovementDict
+reduceKeys :: KeyDict -> Event -> KeyDict
 reduceKeys m ev = do
 	if (eType ev) == "keydown"
 		then (insert (eWhich ev) True m)
@@ -174,7 +215,7 @@ fixDegrees 360 = 0
 fixDegrees (-1) = 359
 fixDegrees x = x
 
-fixPosition ::ScreenDemension -> Coords ->  Coords
+fixPosition ::ScreenDimension -> Coords ->  Coords
 fixPosition (maxX,maxY) (x,y,r)  = (maxValFix x maxX, maxValFix y maxY,r)
 
 
