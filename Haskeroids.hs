@@ -50,6 +50,24 @@ loop gState context = do
 		
 		
 		let collisions = Prelude.map (detectAsteroidCollision coords) astroids  
+
+		let astroidPostCol = Prelude.map (\ast -> Prelude.foldl updateHits ast projects) astroids
+
+		let remainingProjects = Prelude.filter (filterStopedProjectiles astroidPostCol) projects 
+
+		let splittingAsts = Prelude.filter (\ast -> (((snd5 ast) <= (thr5 ast)) && ((snd5 ast) > 1))) astroidPostCol
+
+
+		let remainingAsteroids =  Prelude.filter (\ast -> not $((snd5 ast) <= (thr5 ast))) astroidPostCol
+
+		smallAsteroids <- sequence $ Prelude.map (\ast -> createSplitAsteroids (snd5 ast) (fst5 ast)) splittingAsts
+
+		let allSmallAst = Prelude.concat smallAsteroids
+
+		let currentAst = remainingAsteroids ++ allSmallAst
+
+		let newScore = score + (Prelude.length splittingAsts)
+
 		if (or collisions)
 			then
 				do
@@ -61,18 +79,18 @@ loop gState context = do
 				send context $ do
 					clearCanvas
 					printScore score screenDim
-					sequence_ $ Prelude.map printSimpleAsteroid astroids
-					sequence_ $ Prelude.map printProjectile projects
+					sequence_ $ Prelude.map printSimpleAsteroid currentAst
+					sequence_ $ Prelude.map printProjectile remainingProjects
 					printShip coords
 
 				
 
-				threadDelay (2 * 1000)		
+				threadDelay (2 * 100)		
 
-				newAsts <- repopulateAsteroids astroids screenDim
+				newAsts <- repopulateAsteroids currentAst screenDim
 				
 				let newAsteroids = moveAstroids newAsts screenDim
-				let mvdProjects = moveProjectiles projects screenDim
+				let mvdProjects = moveProjectiles remainingProjects screenDim
 				
 
 
@@ -81,20 +99,28 @@ loop gState context = do
 				
 
 				if ((Prelude.null ch) && (Map.null preKeys )) 
-					then loop (GameState coords preKeys newAsteroids mvdProjects (lastFire +1) score) context
+					then loop (GameState coords preKeys newAsteroids mvdProjects (lastFire +1) newScore) context
 					else 
 						do
 							print ch
 							let dict = Prelude.foldl reduceKeys preKeys ch
 							let charList = keys dict
 							let newLoc = (Prelude.foldl (movement.(fixPosition screenDim))  coords charList) 
-							if (lastFire > 10)
+							if (lastFire > 15)
 								then
 									do
 										let newPros = fireProjectiles dict coords mvdProjects
-										loop (GameState newLoc dict newAsteroids newPros 0 score) context
+										loop (GameState newLoc dict newAsteroids newPros 0 newScore) context
 							else
-								loop (GameState newLoc dict newAsteroids mvdProjects (lastFire +1) score) context
+								loop (GameState newLoc dict newAsteroids mvdProjects (lastFire +1) newScore) context
+
+
+
+filterStopedProjectiles :: [Asteroid] -> Projectile -> Bool
+filterStopedProjectiles asts pro =  not $ or $ Prelude.map (detectAsteroidCollision (fst pro)) asts
+
+updateHits :: Asteroid -> Projectile -> Asteroid
+updateHits ast proj = if (detectAsteroidCollision (fst proj) ast) then (fst5 ast , snd5 ast, ((thr5 ast)+1), for5 ast, fif5 ast) else ast
 
 moveProjectiles :: [Projectile] -> ScreenDimension -> [Projectile]
 moveProjectiles pros maxDim = Prelude.map (moveProjectile maxDim) (Prelude.filter (\pro -> snd pro < 100) pros)
@@ -122,6 +148,8 @@ repopulateAsteroids as dim= do
 	else
 		return as
 
+
+
 detectAsteroidCollision :: Coords -> Asteroid -> Bool
 detectAsteroidCollision (x,y, r) (crds, sz, _, _, _)  = (fromIntegral radAst) > distToShip where
 	radAst = 10 * sz
@@ -129,6 +157,11 @@ detectAsteroidCollision (x,y, r) (crds, sz, _, _, _)  = (fromIntegral radAst) > 
 	deltaY = abs ((snd3 crds) - (y+10))
 	distToShip = sqrt((deltaX ** 2) + (deltaY ** 2))
 
+createSplitAsteroids :: Size -> Coords -> IO([Asteroid])
+createSplitAsteroids sz crds = do
+	dir1 <- randomRIO(0, 360)
+	dir2 <- randomRIO(0, 360)
+	return [(crds, (sz-1),0,dir1, (1/(fromIntegral sz))),(crds, (sz-1),0,dir2, (1/(fromIntegral sz)))]
 
 createXLargeAsteroid :: ScreenDimension -> IO(Asteroid)
 createXLargeAsteroid (maxX,maxY) = do
@@ -158,11 +191,13 @@ printProjectile ((x,y,r), _) = do
 printSimpleAsteroid :: Asteroid -> Canvas ()
 printSimpleAsteroid ((x, y, _), size, hits, dir, spd)= do
 	beginPath()
+	--font "bold 16px Arial"
 	arc(x, y, (fromIntegral(size) * 10), 0, pi*2, False)
 	fillStyle "gray"
 	strokeStyle "black"
 	closePath()
 	fill()
+	--fillText((pack(show hits)),x,y)
 	stroke()
 
 printScore :: Int -> ScreenDimension -> Canvas ()
@@ -235,3 +270,18 @@ snd3 (_, y, _) = y
 
 thr3 :: (a,b,c) -> c
 thr3 (_, _, z) = z
+
+fst5 :: (a,b,c,d,e) -> a
+fst5 (a,_,_,_,_) = a
+ 
+snd5 :: (a,b,c,d,e) -> b
+snd5 (_,b,_,_,_) = b
+
+thr5 :: (a,b,c,d,e) -> c
+thr5 (_,_,c,_,_) = c
+
+for5 :: (a,b,c,d,e) -> d
+for5 (_,_,_,d,_) = d
+
+fif5 :: (a,b,c,d,e) -> e
+fif5 (_,_,_,_,e) = e
